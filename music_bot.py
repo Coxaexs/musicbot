@@ -388,6 +388,7 @@ class MusicPlayer:
         self.volume = 0.5
         self.loop = False
         self.loop_queue = False
+        self.pending_playlist = None  # For just-in-time playlist loading
 
     async def play_next(self):
         """Play the next song in queue"""
@@ -395,6 +396,10 @@ class MusicPlayer:
             self.queue.appendleft(self.current)
         elif self.loop_queue and self.current:
             self.queue.append(self.current)
+        
+        # Load next song from pending playlist if queue is empty
+        if not self.queue and self.pending_playlist:
+            await self.load_next_from_playlist()
         
         if not self.queue:
             self.current = None
@@ -408,6 +413,10 @@ class MusicPlayer:
             print("ERROR: Popped None from queue!")
             await self.play_next()
             return
+        
+        # Load next song in background while current plays
+        if self.pending_playlist:
+            asyncio.create_task(self.load_next_from_playlist())
         
         print(f"Playing from queue: {self.current.title} (type: {self.current.source_type})")
         
@@ -449,6 +458,86 @@ class MusicPlayer:
             traceback.print_exc()
             # Try next song
             await self.play_next()
+    
+    async def load_next_from_playlist(self):
+        """Load the next song from pending playlist"""
+        if not self.pending_playlist:
+            return
+        
+        try:
+            playlist = self.pending_playlist
+            idx = playlist['current_index']
+            
+            # Check if Spotify or YouTube
+            if playlist.get('is_spotify'):
+                tracks = playlist['tracks']
+                if idx >= len(tracks):
+                    # No more tracks
+                    self.pending_playlist = None
+                    return
+                
+                item = tracks[idx]
+                if playlist['is_album']:
+                    track, artist_name = item
+                    search_query = f"{track['name']} {artist_name}"
+                else:
+                    track = item.get('track')
+                    if not track or not track.get('name'):
+                        playlist['current_index'] += 1
+                        return
+                    search_query = f"{track['name']} {track['artists'][0]['name']}"
+                
+                print(f"🔍 Loading next Spotify song: {search_query}")
+                # Import needed to call process_youtube
+                from music_bot import MusicCog
+                cog = self.bot.get_cog('MusicCog')
+                if cog:
+                    song = await cog.process_youtube(search_query, playlist['requester'])
+                    if song:
+                        song.source_type = 'spotify'
+                        self.queue.append(song)
+                        print(f"  ✅ Added: {song.title}")
+            
+            else:
+                # YouTube playlist
+                entries = playlist['entries']
+                if idx >= len(entries):
+                    # No more entries
+                    self.pending_playlist = None
+                    return
+                
+                entry = entries[idx]
+                if not entry:
+                    playlist['current_index'] += 1
+                    return
+                
+                video_id = entry.get('id')
+                title = entry.get('title', 'Unknown')
+                duration = entry.get('duration', 0)
+                video_url = entry.get('webpage_url') or entry.get('url') or f"https://www.youtube.com/watch?v={video_id}"
+                
+                # Import to get format_duration
+                cog = self.bot.get_cog('MusicCog')
+                duration_str = cog.format_duration(duration) if cog else "Unknown"
+                
+                song = Song(
+                    title=title,
+                    url=video_url,
+                    duration=duration_str,
+                    requester=playlist['requester'],
+                    source_type='youtube',
+                    thumbnail=entry.get('thumbnail')
+                )
+                self.queue.append(song)
+                print(f"🔍 Loading next YouTube song: {title}")
+            
+            # Increment index for next time
+            playlist['current_index'] += 1
+            
+        except Exception as e:
+            print(f"Error loading next playlist song: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 class MusicCog(commands.Cog):
@@ -522,15 +611,19 @@ class MusicCog(commands.Cog):
                 
                 # Check if it's a playlist or album
                 if 'playlist' in query or 'album' in query:
-                    initial_songs, total_count = await self.process_spotify_initial(query, interaction.user)
-                    songs_added = initial_songs
+                    first_song, total_count, remaining_tracks = await self.process_spotify_initial(query, interaction.user)
+                    songs_added = first_song
                     
-                    # Start background task for remaining songs
-                    if total_count > 3:
-                        player._loading_playlist = True
-                        asyncio.create_task(self.process_playlist_background(
-                            query, interaction.user, player, interaction.guild, 'spotify', total_count
-                        ))
+                    # Store playlist data for just-in-time loading
+                    if total_count > 1 and remaining_tracks:
+                        is_album = 'album' in query
+                        player.pending_playlist = {
+                            'tracks': remaining_tracks,
+                            'requester': interaction.user,
+                            'current_index': 0,
+                            'is_spotify': True,
+                            'is_album': is_album
+                        }
                 else:
                     # Single track
                     songs_added = await self.process_spotify(query, interaction.user)
@@ -541,16 +634,17 @@ class MusicCog(commands.Cog):
                 # Check if it's a playlist URL
                 if 'list=' in query:
                     print("Detected playlist URL")
-                    # Process first 3 songs immediately, rest in background
-                    initial_songs, total_count, all_entries = await self.process_youtube_playlist_initial(query, interaction.user)
-                    songs_added = initial_songs
+                    # Load first song only, store rest for on-demand loading
+                    first_song, total_count, all_entries = await self.process_youtube_playlist_initial(query, interaction.user)
+                    songs_added = first_song
                     
-                    # Start background task with pre-fetched data (runs immediately!)
-                    if total_count > 3 and len(all_entries) > 3:
-                        player._loading_playlist = True
-                        asyncio.create_task(self.process_youtube_background(
-                            all_entries[3:50], interaction.user, player
-                        ))
+                    # Store playlist data for just-in-time loading
+                    if total_count > 1 and len(all_entries) > 1:
+                        player.pending_playlist = {
+                            'entries': all_entries[1:50],  # Skip first, up to 50 total
+                            'requester': interaction.user,
+                            'current_index': 0
+                        }
                 else:
                     song = await self.process_youtube(query, interaction.user)
                     print(f"Got song: {song}")
@@ -654,14 +748,14 @@ class MusicCog(commands.Cog):
             return None
     
     async def process_youtube_playlist_initial(self, url: str, requester: discord.Member) -> tuple[list[Song], int, list]:
-        """Process first 3 songs of YouTube playlist for immediate playback"""
+        """Process first song of YouTube playlist only, store rest for later"""
         loop = asyncio.get_event_loop()
         songs = []
         total_count = 0
         all_entries = []
         
         try:
-            print(f"Processing playlist (first 3): {url}")
+            print(f"Processing playlist (first song only): {url}")
             data = await loop.run_in_executor(
                 None,
                 lambda: ytdl_playlist.extract_info(url, download=False)
@@ -679,18 +773,16 @@ class MusicCog(commands.Cog):
             all_entries = data.get('entries', [])
             total_count = len(all_entries)
             playlist_title = data.get('title', 'Playlist')
-            print(f"Found playlist: {playlist_title} with {total_count} videos (loading first 3)")
+            print(f"Found playlist: {playlist_title} with {total_count} videos")
             
-            # Process only first 3
-            for entry in all_entries[:3]:
-                if not entry:
-                    continue
-                
+            # Process only first song
+            first_entry = all_entries[0] if all_entries else None
+            if first_entry:
                 try:
-                    video_id = entry.get('id')
-                    title = entry.get('title', 'Unknown')
-                    duration = entry.get('duration', 0)
-                    video_url = entry.get('webpage_url') or entry.get('url') or f"https://www.youtube.com/watch?v={video_id}"
+                    video_id = first_entry.get('id')
+                    title = first_entry.get('title', 'Unknown')
+                    duration = first_entry.get('duration', 0)
+                    video_url = first_entry.get('webpage_url') or first_entry.get('url') or f"https://www.youtube.com/watch?v={video_id}"
                     
                     song = Song(
                         title=title,
@@ -698,12 +790,11 @@ class MusicCog(commands.Cog):
                         duration=self.format_duration(duration),
                         requester=requester,
                         source_type='youtube',
-                        thumbnail=entry.get('thumbnail')
+                        thumbnail=first_entry.get('thumbnail')
                     )
                     songs.append(song)
                 except Exception as e:
                     print(f"Error processing entry: {e}")
-                    continue
             
         except Exception as e:
             print(f"Playlist processing error: {e}")
@@ -894,26 +985,36 @@ class MusicCog(commands.Cog):
         finally:
             player._loading_playlist = False
     
-    async def process_spotify_initial(self, url: str, requester: discord.Member) -> tuple[list[Song], int]:
-        """Process first 3 songs of Spotify playlist/album for immediate playback"""
+    async def process_spotify_initial(self, url: str, requester: discord.Member) -> tuple[list[Song], int, list]:
+        """Process first song of Spotify playlist/album only, store rest for later"""
         songs = []
         total_count = 0
+        remaining_tracks = []
         
         if not SPOTIFY_AVAILABLE:
-            return songs, 0
+            return songs, 0, []
         
         try:
-            print(f"Processing Spotify URL (first 3): {url}")
+            print(f"Processing Spotify URL (first song only): {url}")
             
             if 'playlist' in url:
                 playlist = sp.playlist(url)
                 total_count = playlist['tracks']['total']
-                tracks = playlist['tracks']['items'][:3]
+                results = playlist['tracks']
+                all_tracks = results['items']
                 
-                print(f"  Playlist: {playlist['name']} ({total_count} tracks, loading first 3)")
+                # Get all tracks
+                while results['next']:
+                    results = sp.next(results)
+                    all_tracks.extend(results['items'])
                 
-                for item in tracks:
-                    track = item.get('track')
+                remaining_tracks = all_tracks[1:50]  # Store all except first
+                
+                print(f"  Playlist: {playlist['name']} ({total_count} tracks)")
+                
+                # Process only first track
+                if all_tracks:
+                    track = all_tracks[0].get('track')
                     if track and track.get('name'):
                         search_query = f"{track['name']} {track['artists'][0]['name']}"
                         print(f"  Searching: {search_query}")
@@ -921,28 +1022,31 @@ class MusicCog(commands.Cog):
                         if song:
                             song.source_type = 'spotify'
                             songs.append(song)
-                        await asyncio.sleep(0.2)
             
             elif 'album' in url:
                 album = sp.album(url)
                 total_count = album['total_tracks']
                 artist_name = album['artists'][0]['name']
+                all_tracks = album['tracks']['items']
                 
-                print(f"  Album: {album['name']} ({total_count} tracks, loading first 3)")
+                remaining_tracks = [(track, artist_name) for track in all_tracks[1:50]]  # Store all except first
                 
-                for track in album['tracks']['items'][:3]:
+                print(f"  Album: {album['name']} ({total_count} tracks)")
+                
+                # Process only first track
+                if all_tracks:
+                    track = all_tracks[0]
                     search_query = f"{track['name']} {artist_name}"
                     print(f"  Searching: {search_query}")
                     song = await self.process_youtube(search_query, requester)
                     if song:
                         song.source_type = 'spotify'
                         songs.append(song)
-                    await asyncio.sleep(0.2)
         
         except Exception as e:
             print(f"Spotify initial processing error: {e}")
         
-        return songs, total_count
+        return songs, total_count, remaining_tracks
 
     async def process_spotify(self, url: str, requester: discord.Member) -> list[Song]:
         """Process Spotify single track"""
