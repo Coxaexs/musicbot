@@ -212,7 +212,6 @@ YTDL_FORMAT_OPTIONS = {
 FFMPEG_OPTIONS = {
     'options': '-vn'
 }
-
 # Separate extractor for getting info only
 YTDL_SEARCH_OPTIONS = {
     'format': 'bestaudio/best',
