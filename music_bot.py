@@ -9,7 +9,7 @@ import tempfile
 from collections import deque
 from dataclasses import dataclass
 from typing import Optional
-import aiohttp
+import aiohttpsti
 import ctypes.util
 import re
 import json
