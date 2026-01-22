@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+from discord.ui import View, Button
 import asyncio
 import yt_dlp
 import os
@@ -377,6 +378,175 @@ class YTDLSource(discord.PCMVolumeTransformer):
         raise Exception("All YouTube download methods failed")
 
 
+class MusicControlView(View):
+    """Interactive button controls for music player"""
+    
+    def __init__(self, bot, guild_id):
+        super().__init__(timeout=None)  # Persistent buttons
+        self.bot = bot
+        self.guild_id = guild_id
+    
+    def get_player(self):
+        """Get the music player for this guild"""
+        cog = self.bot.get_cog('MusicCog')
+        if cog:
+            return cog.get_player(self.bot.get_guild(self.guild_id))
+        return None
+    
+    @discord.ui.button(label="⏮️", style=discord.ButtonStyle.secondary, custom_id="previous")
+    async def previous_button(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_message("⏮️ Previous song feature coming soon!", ephemeral=True)
+    
+    @discord.ui.button(label="⏯️", style=discord.ButtonStyle.primary, custom_id="pause_resume")
+    async def pause_resume_button(self, interaction: discord.Interaction, button: Button):
+        voice_client = interaction.guild.voice_client
+        if not voice_client:
+            await interaction.response.send_message("❌ Not connected to voice!", ephemeral=True)
+            return
+        
+        if voice_client.is_playing():
+            voice_client.pause()
+            await interaction.response.send_message("⏸️ Paused!", ephemeral=True)
+        elif voice_client.is_paused():
+            voice_client.resume()
+            await interaction.response.send_message("▶️ Resumed!", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
+    
+    @discord.ui.button(label="⏭️", style=discord.ButtonStyle.secondary, custom_id="skip")
+    async def skip_button(self, interaction: discord.Interaction, button: Button):
+        voice_client = interaction.guild.voice_client
+        if not voice_client or not voice_client.is_playing():
+            await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
+            return
+        
+        player = self.get_player()
+        if player:
+            player.loop = False
+        
+        await interaction.response.defer()
+        voice_client.stop()
+        await asyncio.sleep(0.5)
+        
+        if player and player.current:
+            cog = self.bot.get_cog('MusicCog')
+            embed = cog.create_now_playing_embed(player.current)
+            await interaction.followup.send(embed=embed)
+        else:
+            await interaction.followup.send("⏭️ Skipped! No more songs.")
+    
+    @discord.ui.button(label="🔊", style=discord.ButtonStyle.secondary, custom_id="volume_up")
+    async def volume_up_button(self, interaction: discord.Interaction, button: Button):
+        player = self.get_player()
+        if not player:
+            await interaction.response.send_message("❌ No player found!", ephemeral=True)
+            return
+        
+        new_volume = min(player.volume + 0.1, 1.0)
+        player.volume = new_volume
+        
+        voice_client = interaction.guild.voice_client
+        if voice_client and voice_client.source:
+            voice_client.source.volume = new_volume
+        
+        await interaction.response.send_message(f"🔊 Volume: {int(new_volume * 100)}%", ephemeral=True)
+    
+    @discord.ui.button(label="🔉", style=discord.ButtonStyle.secondary, custom_id="volume_down")
+    async def volume_down_button(self, interaction: discord.Interaction, button: Button):
+        player = self.get_player()
+        if not player:
+            await interaction.response.send_message("❌ No player found!", ephemeral=True)
+            return
+        
+        new_volume = max(player.volume - 0.1, 0.0)
+        player.volume = new_volume
+        
+        voice_client = interaction.guild.voice_client
+        if voice_client and voice_client.source:
+            voice_client.source.volume = new_volume
+        
+        await interaction.response.send_message(f"🔉 Volume: {int(new_volume * 100)}%", ephemeral=True)
+    
+    @discord.ui.button(label="🔀", style=discord.ButtonStyle.secondary, custom_id="shuffle", row=1)
+    async def shuffle_button(self, interaction: discord.Interaction, button: Button):
+        import random
+        player = self.get_player()
+        if not player:
+            await interaction.response.send_message("❌ No player found!", ephemeral=True)
+            return
+        
+        if len(player.queue) < 2:
+            await interaction.response.send_message("❌ Not enough songs to shuffle!", ephemeral=True)
+            return
+        
+        queue_list = list(player.queue)
+        random.shuffle(queue_list)
+        player.queue = deque(queue_list)
+        player.preloaded_sources.clear()  # Clear preloaded cache since queue order changed
+        
+        # Preload the new next song
+        asyncio.create_task(player.preload_next_song())
+        
+        await interaction.response.send_message("🔀 Queue shuffled!", ephemeral=True)
+    
+    @discord.ui.button(label="⏹️", style=discord.ButtonStyle.danger, custom_id="stop", row=1)
+    async def stop_button(self, interaction: discord.Interaction, button: Button):
+        player = self.get_player()
+        if player:
+            player.queue.clear()
+            player.current = None
+            player.loop = False
+            player.loop_queue = False
+            player.pending_playlist = None
+            player.preloaded_sources.clear()  # Clear preloaded cache
+        
+        voice_client = interaction.guild.voice_client
+        if voice_client:
+            voice_client.stop()
+        
+        await interaction.response.send_message("⏹️ Stopped!", ephemeral=True)
+    
+    @discord.ui.button(label="📜", style=discord.ButtonStyle.secondary, custom_id="queue", row=1)
+    async def queue_button(self, interaction: discord.Interaction, button: Button):
+        player = self.get_player()
+        if not player:
+            await interaction.response.send_message("❌ No player found!", ephemeral=True)
+            return
+        
+        if not player.current and not player.queue:
+            await interaction.response.send_message("📭 Queue is empty!", ephemeral=True)
+            return
+        
+        embed = discord.Embed(title="🎶 Music Queue", color=discord.Color.blurple())
+        
+        if player.current:
+            embed.add_field(
+                name="Now Playing",
+                value=f"**{player.current.title}** [{player.current.duration}]",
+                inline=False
+            )
+        
+        if player.queue:
+            queue_list = []
+            for i, song in enumerate(list(player.queue)[:10], 1):
+                queue_list.append(f"`{i}.` **{song.title}** [{song.duration}]")
+            
+            if len(player.queue) > 10:
+                queue_list.append(f"\n*...and {len(player.queue) - 10} more*")
+            
+            embed.add_field(name="Up Next", value="\n".join(queue_list), inline=False)
+        
+        status = []
+        if player.loop:
+            status.append("🔂 Loop: Song")
+        if player.loop_queue:
+            status.append("🔁 Loop: Queue")
+        if status:
+            embed.set_footer(text=" | ".join(status))
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 class MusicPlayer:
     """Music player for a guild"""
     
@@ -389,6 +559,61 @@ class MusicPlayer:
         self.loop = False
         self.loop_queue = False
         self.pending_playlist = None  # For just-in-time playlist loading
+        self.preloaded_sources = {}  # Cache for pre-downloaded audio sources
+        self._preload_task = None  # Background preload task
+
+    async def preload_next_song(self):
+        """Preload the next song in queue while current is playing"""
+        if not self.queue:
+            return
+        
+        # Get the next song without removing it
+        next_song = self.queue[0]
+        song_key = f"{next_song.url}_{id(next_song)}"
+        
+        # Skip if already preloaded
+        if song_key in self.preloaded_sources:
+            return
+        
+        try:
+            print(f"🔄 Preloading: {next_song.title}")
+            
+            if next_song.source_type == 'local':
+                # Local files don't need preloading
+                return
+            elif next_song.source_type == 'spotify' and next_song.url.startswith('spotify:search:'):
+                # Spotify song - search on YouTube first
+                search_query = next_song.url.replace('spotify:search:', '')
+                cog = self.bot.get_cog('MusicCog')
+                if cog:
+                    yt_song = await cog.process_youtube(search_query, next_song.requester)
+                    if yt_song:
+                        # Update the song in queue
+                        next_song.url = yt_song.url
+                        next_song.title = yt_song.title
+                        next_song.duration = yt_song.duration
+                        next_song.thumbnail = yt_song.thumbnail
+                
+                # Now preload the stream
+                source = await YTDLSource.from_url(
+                    next_song.url,
+                    loop=self.bot.loop,
+                    stream=True
+                )
+                self.preloaded_sources[song_key] = source
+                print(f"✅ Preloaded: {next_song.title}")
+            else:
+                # YouTube - preload stream
+                source = await YTDLSource.from_url(
+                    next_song.url,
+                    loop=self.bot.loop,
+                    stream=True
+                )
+                self.preloaded_sources[song_key] = source
+                print(f"✅ Preloaded: {next_song.title}")
+                
+        except Exception as e:
+            print(f"Preload error: {e}")
 
     async def play_next(self):
         """Play the next song in queue"""
@@ -403,10 +628,12 @@ class MusicPlayer:
         
         if not self.queue:
             self.current = None
+            self.preloaded_sources.clear()  # Clear preload cache
             print("Queue is empty, nothing to play")
             return
         
         self.current = self.queue.popleft()
+        song_key = f"{self.current.url}_{id(self.current)}"
         
         # Safety check
         if not self.current:
@@ -426,10 +653,38 @@ class MusicPlayer:
             return
         
         try:
-            if self.current.source_type == 'local':
+            # Check if we have a preloaded source
+            if song_key in self.preloaded_sources:
+                print(f"🚀 Using preloaded source for: {self.current.title}")
+                source = self.preloaded_sources.pop(song_key)
+                source.volume = self.volume
+            elif self.current.source_type == 'local':
                 # Local file - direct FFmpeg
                 source = discord.FFmpegPCMAudio(self.current.url)
                 source = discord.PCMVolumeTransformer(source, volume=self.volume)
+            elif self.current.source_type == 'spotify' and self.current.url.startswith('spotify:search:'):
+                # Spotify song needs to be searched on YouTube first
+                search_query = self.current.url.replace('spotify:search:', '')
+                print(f"🔍 Searching YouTube for: {search_query}")
+                
+                # Get the cog to use process_youtube
+                cog = self.bot.get_cog('MusicCog')
+                if cog:
+                    yt_song = await cog.process_youtube(search_query, self.current.requester)
+                    if yt_song:
+                        # Update current song with actual YouTube URL
+                        self.current.url = yt_song.url
+                        self.current.title = yt_song.title
+                        self.current.duration = yt_song.duration
+                        self.current.thumbnail = yt_song.thumbnail
+                
+                # Now get the stream
+                source = await YTDLSource.from_url(
+                    self.current.url, 
+                    loop=self.bot.loop, 
+                    stream=True
+                )
+                source.volume = self.volume
             else:
                 # YouTube/Spotify - use yt-dlp to get stream
                 source = await YTDLSource.from_url(
@@ -451,6 +706,10 @@ class MusicPlayer:
             
             voice_client.play(source, after=after_playing)
             print(f"▶️ Now playing: {self.current.title}")
+            
+            # Start preloading the next song in background
+            if self.queue:
+                asyncio.create_task(self.preload_next_song())
             
         except Exception as e:
             print(f"Error playing song: {e}")
@@ -611,19 +870,8 @@ class MusicCog(commands.Cog):
                 
                 # Check if it's a playlist or album
                 if 'playlist' in query or 'album' in query:
-                    first_song, total_count, remaining_tracks = await self.process_spotify_initial(query, interaction.user)
-                    songs_added = first_song
-                    
-                    # Store playlist data for just-in-time loading
-                    if total_count > 1 and remaining_tracks:
-                        is_album = 'album' in query
-                        player.pending_playlist = {
-                            'tracks': remaining_tracks,
-                            'requester': interaction.user,
-                            'current_index': 0,
-                            'is_spotify': True,
-                            'is_album': is_album
-                        }
+                    all_songs, total_count = await self.process_spotify_playlist_fast(query, interaction.user)
+                    songs_added = all_songs
                 else:
                     # Single track
                     songs_added = await self.process_spotify(query, interaction.user)
@@ -634,17 +882,9 @@ class MusicCog(commands.Cog):
                 # Check if it's a playlist URL
                 if 'list=' in query:
                     print("Detected playlist URL")
-                    # Load first song only, store rest for on-demand loading
-                    first_song, total_count, all_entries = await self.process_youtube_playlist_initial(query, interaction.user)
-                    songs_added = first_song
-                    
-                    # Store playlist data for just-in-time loading
-                    if total_count > 1 and len(all_entries) > 1:
-                        player.pending_playlist = {
-                            'entries': all_entries[1:50],  # Skip first, up to 50 total
-                            'requester': interaction.user,
-                            'current_index': 0
-                        }
+                    # Load ALL songs to queue immediately (metadata only), download on-demand
+                    all_songs, total_count = await self.process_youtube_playlist_fast(query, interaction.user)
+                    songs_added = all_songs
                 else:
                     song = await self.process_youtube(query, interaction.user)
                     print(f"Got song: {song}")
@@ -671,7 +911,8 @@ class MusicCog(commands.Cog):
                 await player.play_next()
                 if player.current:
                     embed = self.create_now_playing_embed(player.current)
-                    await interaction.followup.send(embed=embed)
+                    view = MusicControlView(self.bot, interaction.guild.id)
+                    await interaction.followup.send(embed=embed, view=view)
                 else:
                     await interaction.followup.send("❌ Failed to play the song.")
             else:
@@ -746,6 +987,130 @@ class MusicCog(commands.Cog):
             import traceback
             traceback.print_exc()
             return None
+    
+    async def process_youtube_playlist_fast(self, url: str, requester: discord.Member) -> tuple[list[Song], int]:
+        """Add all playlist songs to queue with metadata only - download happens on-demand"""
+        loop = asyncio.get_event_loop()
+        songs = []
+        
+        try:
+            print(f"Loading playlist metadata: {url}")
+            data = await loop.run_in_executor(
+                None,
+                lambda: ytdl_playlist.extract_info(url, download=False)
+            )
+            
+            if not data:
+                return songs, 0
+            
+            if 'entries' not in data:
+                song = await self.process_youtube(url, requester)
+                if song:
+                    songs.append(song)
+                return songs, 1
+            
+            entries = data.get('entries', [])
+            total_count = len(entries)
+            playlist_title = data.get('title', 'Playlist')
+            print(f"Found playlist: {playlist_title} with {total_count} videos")
+            
+            # Add all songs to queue (metadata only, up to 50)
+            for entry in entries[:50]:
+                if not entry:
+                    continue
+                
+                try:
+                    video_id = entry.get('id')
+                    title = entry.get('title', 'Unknown')
+                    duration = entry.get('duration', 0)
+                    video_url = entry.get('webpage_url') or entry.get('url') or f"https://www.youtube.com/watch?v={video_id}"
+                    
+                    song = Song(
+                        title=title,
+                        url=video_url,
+                        duration=self.format_duration(duration),
+                        requester=requester,
+                        source_type='youtube',
+                        thumbnail=entry.get('thumbnail')
+                    )
+                    songs.append(song)
+                except Exception as e:
+                    print(f"Error processing entry: {e}")
+                    continue
+            
+            print(f"✅ Added {len(songs)} songs to queue (will download on-demand)")
+            
+        except Exception as e:
+            print(f"Playlist processing error: {e}")
+        
+        return songs, total_count
+    
+    async def process_spotify_playlist_fast(self, url: str, requester: discord.Member) -> tuple[list[Song], int]:
+        """Add all Spotify playlist songs to queue with track names - search happens on-demand"""
+        songs = []
+        total_count = 0
+        
+        if not SPOTIFY_AVAILABLE:
+            return songs, 0
+        
+        try:
+            print(f"Loading Spotify playlist metadata: {url}")
+            
+            if 'playlist' in url:
+                playlist = sp.playlist(url)
+                total_count = playlist['tracks']['total']
+                results = playlist['tracks']
+                all_tracks = results['items']
+                
+                # Get all tracks
+                while results['next']:
+                    results = sp.next(results)
+                    all_tracks.extend(results['items'])
+                
+                print(f"  Playlist: {playlist['name']} ({total_count} tracks)")
+                
+                # Add all tracks to queue (metadata only, up to 50)
+                for item in all_tracks[:50]:
+                    track = item.get('track')
+                    if track and track.get('name'):
+                        # Create a special Song object that will be searched later
+                        search_query = f"{track['name']} {track['artists'][0]['name']}"
+                        song = Song(
+                            title=search_query,  # Store search query as title temporarily
+                            url=f"spotify:search:{search_query}",  # Special URL marker
+                            duration="Unknown",
+                            requester=requester,
+                            source_type='spotify',
+                            thumbnail=track.get('album', {}).get('images', [{}])[0].get('url') if track.get('album') else None
+                        )
+                        songs.append(song)
+            
+            elif 'album' in url:
+                album = sp.album(url)
+                total_count = album['total_tracks']
+                artist_name = album['artists'][0]['name']
+                
+                print(f"  Album: {album['name']} ({total_count} tracks)")
+                
+                # Add all tracks to queue (metadata only, up to 50)
+                for track in album['tracks']['items'][:50]:
+                    search_query = f"{track['name']} {artist_name}"
+                    song = Song(
+                        title=search_query,
+                        url=f"spotify:search:{search_query}",
+                        duration="Unknown",
+                        requester=requester,
+                        source_type='spotify',
+                        thumbnail=album.get('images', [{}])[0].get('url') if album.get('images') else None
+                    )
+                    songs.append(song)
+            
+            print(f"✅ Added {len(songs)} songs to queue (will search on-demand)")
+            
+        except Exception as e:
+            print(f"Spotify playlist processing error: {e}")
+        
+        return songs, total_count
     
     async def process_youtube_playlist_initial(self, url: str, requester: discord.Member) -> tuple[list[Song], int, list]:
         """Process first song of YouTube playlist only, store rest for later"""
@@ -1109,8 +1474,23 @@ class MusicCog(commands.Cog):
         
         player = self.get_player(interaction.guild)
         player.loop = False
+        
+        # Defer the response since we need to wait for the next song to start
+        await interaction.response.defer()
+        
+        # Stop current song (this will trigger play_next)
         interaction.guild.voice_client.stop()
-        await interaction.response.send_message("⏭️ Skipped!")
+        
+        # Wait a moment for the next song to start playing
+        await asyncio.sleep(0.5)
+        
+        # Send now playing embed for the new song
+        if player.current:
+            embed = self.create_now_playing_embed(player.current)
+            view = MusicControlView(self.bot, interaction.guild.id)
+            await interaction.followup.send(embed=embed, view=view)
+        else:
+            await interaction.followup.send("⏭️ Skipped! No more songs in queue.")
 
     @app_commands.command(name="stop", description="Stop playback and clear the queue")
     async def stop(self, interaction: discord.Interaction):
@@ -1119,6 +1499,7 @@ class MusicCog(commands.Cog):
         player.current = None
         player.loop = False
         player.loop_queue = False
+        player.preloaded_sources.clear()  # Clear preloaded cache
         
         if interaction.guild.voice_client:
             interaction.guild.voice_client.stop()
@@ -1187,7 +1568,8 @@ class MusicCog(commands.Cog):
             return
         
         embed = self.create_now_playing_embed(player.current)
-        await interaction.response.send_message(embed=embed)
+        view = MusicControlView(self.bot, interaction.guild.id)
+        await interaction.response.send_message(embed=embed, view=view)
 
     @app_commands.command(name="volume", description="Set the volume (0-100)")
     @app_commands.describe(level="Volume level (0-100)")
@@ -1239,6 +1621,10 @@ class MusicCog(commands.Cog):
         queue_list = list(player.queue)
         random.shuffle(queue_list)
         player.queue = deque(queue_list)
+        player.preloaded_sources.clear()  # Clear preloaded cache since queue order changed
+        
+        # Preload the new next song
+        asyncio.create_task(player.preload_next_song())
         
         await interaction.response.send_message("🔀 Queue shuffled!")
 
@@ -1246,6 +1632,7 @@ class MusicCog(commands.Cog):
     async def clear(self, interaction: discord.Interaction):
         player = self.get_player(interaction.guild)
         player.queue.clear()
+        player.preloaded_sources.clear()  # Clear preloaded cache
         await interaction.response.send_message("🗑️ Queue cleared!")
 
     @app_commands.command(name="remove", description="Remove a song from the queue")
@@ -1269,6 +1656,7 @@ class MusicCog(commands.Cog):
             player = self.get_player(interaction.guild)
             player.queue.clear()
             player.current = None
+            player.preloaded_sources.clear()  # Clear preloaded cache
             await interaction.guild.voice_client.disconnect()
             await interaction.response.send_message("👋 Disconnected!")
         else:
@@ -1311,7 +1699,7 @@ async def on_ready():
     
     await bot.change_presence(activity=discord.Activity(
         type=discord.ActivityType.listening,
-        name="/play"
+        name="vibinnnn'"
     ))
 
 
@@ -1324,7 +1712,16 @@ async def on_voice_state_update(member, before, after):
     if voice_client and before.channel == voice_client.channel:
         if len(voice_client.channel.members) == 1:
             await asyncio.sleep(30)
-            if len(voice_client.channel.members) == 1:
+            # Recheck if still alone
+            if voice_client and voice_client.channel and len(voice_client.channel.members) == 1:
+                # Clean up player resources
+                cog = bot.get_cog('MusicCog')
+                if cog:
+                    player = cog.players.get(member.guild.id)
+                    if player:
+                        player.queue.clear()
+                        player.preloaded_sources.clear()
+                        player.current = None
                 await voice_client.disconnect()
 
 
