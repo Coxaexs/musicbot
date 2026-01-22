@@ -195,7 +195,7 @@ def cleanup_old_downloads():
 
 # yt-dlp configuration - download audio to avoid streaming 403 errors
 YTDL_FORMAT_OPTIONS = {
-    'format': 'bestaudio/best',  # More flexible format selection
+    'format': 'bestaudio/best',
     'noplaylist': True,
     'nocheckcertificate': True,
     'ignoreerrors': False,
@@ -207,11 +207,6 @@ YTDL_FORMAT_OPTIONS = {
     'outtmpl': '/tmp/ytdl_%(id)s.%(ext)s',
     'sleep_interval': 3,
     'max_sleep_interval': 10,
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['web', 'mweb'],
-        }
-    },
 }
 
 FFMPEG_OPTIONS = {
@@ -231,11 +226,6 @@ YTDL_SEARCH_OPTIONS = {
     'source_address': '0.0.0.0',
     'skip_download': True,
     'extract_flat': 'in_playlist',
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['mweb', 'android'],
-        }
-    },
 }
 
 # Extractor for playlists
@@ -251,11 +241,6 @@ YTDL_PLAYLIST_OPTIONS = {
     'source_address': '0.0.0.0',
     'skip_download': True,
     'extract_flat': 'in_playlist',
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['mweb', 'android'],
-        }
-    },
 }
 
 ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
