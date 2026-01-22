@@ -195,7 +195,7 @@ def cleanup_old_downloads():
 
 # yt-dlp configuration - download audio to avoid streaming 403 errors
 YTDL_FORMAT_OPTIONS = {
-    'format': '140/bestaudio/best',  # m4a audio format
+    'format': 'bestaudio/best',  # More flexible format selection
     'noplaylist': True,
     'nocheckcertificate': True,
     'ignoreerrors': False,
@@ -209,8 +209,7 @@ YTDL_FORMAT_OPTIONS = {
     'max_sleep_interval': 10,
     'extractor_args': {
         'youtube': {
-            'player_client': ['mweb', 'android'],  # Mobile clients don't need JS
-            'skip': ['dash', 'hls'],
+            'player_client': ['web', 'mweb'],
         }
     },
 }
