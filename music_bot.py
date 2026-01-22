@@ -23,10 +23,17 @@ def load_opus():
         return True
     
     opus_paths = [
+        # macOS paths
         '/opt/homebrew/lib/libopus.dylib', 
         '/usr/local/lib/libopus.dylib',     
         '/opt/homebrew/opt/opus/lib/libopus.dylib',
         '/usr/local/opt/opus/lib/libopus.dylib',
+        # Linux path
+        '/usr/lib/x86_64-linux-gnu/libopus.so.0',
+        '/usr/lib/aarch64-linux-gnu/libopus.so.0',
+        '/usr/lib/libopus.so.0',
+        '/usr/lib/libopus.so',
+        # Fallback to system library finder
         ctypes.util.find_library('opus'),
     ]
     
