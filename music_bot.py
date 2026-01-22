@@ -209,7 +209,7 @@ YTDL_FORMAT_OPTIONS = {
     'max_sleep_interval': 10,
     'extractor_args': {
         'youtube': {
-            'player_client': ['ios', 'web'],  # Try iOS first
+            'player_client': ['mweb', 'android'],  # Mobile clients don't need JS
             'skip': ['dash', 'hls'],
         }
     },
@@ -234,7 +234,7 @@ YTDL_SEARCH_OPTIONS = {
     'extract_flat': 'in_playlist',
     'extractor_args': {
         'youtube': {
-            'player_client': ['web'],
+            'player_client': ['mweb', 'android'],
         }
     },
 }
@@ -254,7 +254,7 @@ YTDL_PLAYLIST_OPTIONS = {
     'extract_flat': 'in_playlist',
     'extractor_args': {
         'youtube': {
-            'player_client': ['web'],
+            'player_client': ['mweb', 'android'],
         }
     },
 }
