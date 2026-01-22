@@ -213,6 +213,7 @@ YTDL_FORMAT_OPTIONS = {
             'skip': ['dash', 'hls'],
         }
     },
+    'js_runtimes': 'nodejs',  # Enable Node.js runtime
 }
 
 FFMPEG_OPTIONS = {
@@ -237,6 +238,7 @@ YTDL_SEARCH_OPTIONS = {
             'player_client': ['mweb', 'android'],
         }
     },
+    'js_runtimes': 'nodejs',
 }
 
 # Extractor for playlists
@@ -257,6 +259,7 @@ YTDL_PLAYLIST_OPTIONS = {
             'player_client': ['mweb', 'android'],
         }
     },
+    'js_runtimes': 'nodejs',
 }
 
 ytdl = yt_dlp.YoutubeDL(YTDL_FORMAT_OPTIONS)
