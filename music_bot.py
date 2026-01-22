@@ -205,7 +205,6 @@ YTDL_FORMAT_OPTIONS = {
     'default_search': 'auto',
     'source_address': '0.0.0.0',
     'outtmpl': '/tmp/ytdl_%(id)s.%(ext)s',
-    'cookiesfrombrowser': ('firefox',),
     'sleep_interval': 3,
     'max_sleep_interval': 10,
     'extractor_args': {
@@ -233,7 +232,6 @@ YTDL_SEARCH_OPTIONS = {
     'source_address': '0.0.0.0',
     'skip_download': True,
     'extract_flat': 'in_playlist',
-    'cookiesfrombrowser': ('firefox',),
     'extractor_args': {
         'youtube': {
             'player_client': ['web'],
@@ -254,7 +252,6 @@ YTDL_PLAYLIST_OPTIONS = {
     'source_address': '0.0.0.0',
     'skip_download': True,
     'extract_flat': 'in_playlist',
-    'cookiesfrombrowser': ('firefox',),
     'extractor_args': {
         'youtube': {
             'player_client': ['web'],
@@ -308,7 +305,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
             # Run yt-dlp CLI command
             cmd = [
                 'yt-dlp',
-                '--cookies-from-browser', 'firefox',
                 '-f', 'bestaudio/best',
                 '-x',
                 '--audio-format', 'mp3',
